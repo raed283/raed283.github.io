@@ -1,9 +1,182 @@
-<title>
-  hello there
-  <heading>
-    hello there once again
-  </heading>
-</title>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ground Control Queue Tracker</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            padding: 20px;
+        }
+        .status-card {
+            background-color: #2a2a2a;
+            border-left: 5px solid #00a8ff;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .position-box {
+            background-color: #242424;
+            border: 1px solid #3d3d3d;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+        }
+        ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        li {
+            padding: 6px 10px;
+            margin: 3px 0;
+            background-color: #333333;
+            border-radius: 3px;
+        }
+        li.target-user {
+            background-color: #00a8ff;
+            color: #ffffff;
+            font-weight: bold;
+        }
+    </style>
+</head>
 <body>
-  hello there twice again
+
+    <h2>ATC Queue Monitor</h2>
+    
+    <!-- Status alert for Raed_64 -->
+    <div class="status-card">
+        <h3>User Status (Raed_64)</h3>
+        <p id="raed-status">Checking queue status...</p>
+    </div>
+
+    <!-- Container for all airport position queues -->
+    <div id="queues-container">Loading position data...</div>
+
+    <script>
+        const API_URL = "https://24data.ptfs.app/controllers";
+        const TARGET_USER = "Raed_64";
+
+        // Memory to track previous state across 6-second refreshes
+        let lastStatus = null; // 'holder', number (queue spot), or null (not in queue)
+        let lastPositionName = "";
+
+        function speak(text) {
+            if ('speechSynthesis' in window) {
+                // Cancel ongoing speech to prevent overlapping queues
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 1.0;
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        async function updateQueue() {
+            try {
+                const response = await fetch(API_URL);
+                const positions = await response.json();
+
+                const container = document.getElementById("queues-container");
+                const raedStatusEl = document.getElementById("raed-status");
+                
+                container.innerHTML = ""; // Reset view
+
+                let currentStatus = null;
+                let currentPositionName = "";
+
+                // Process each airfield position object
+                positions.forEach((pos) => {
+                    const posTitle = `${pos.airport} ${pos.position}`;
+                    
+                    // 1. Check if Raed_64 is holding the position
+                    if (pos.holder === TARGET_USER) {
+                        currentStatus = "holder";
+                        currentPositionName = posTitle;
+                    }
+
+                    // 2. Check queue position if not holder
+                    const queueIndex = pos.queue ? pos.queue.indexOf(TARGET_USER) : -1;
+                    if (queueIndex !== -1 && currentStatus !== "holder") {
+                        currentStatus = queueIndex + 1; // 1-based index (1 = next up)
+                        currentPositionName = posTitle;
+                    }
+
+                    // Build UI for this position
+                    const box = document.createElement("div");
+                    box.className = "position-box";
+                    
+                    let holderText = pos.holder ? pos.holder : (pos.claimable ? "Available" : "None");
+                    let queueHTML = "";
+
+                    if (pos.queue && pos.queue.length > 0) {
+                        queueHTML = "<ol style='margin-top: 5px; padding-left: 20px;'>";
+                        pos.queue.forEach((user) => {
+                            const isUser = user === TARGET_USER;
+                            queueHTML += `<li class="${isUser ? 'target-user' : ''}">${user}</li>`;
+                        });
+                        queueHTML += "</ol>";
+                    } else {
+                        queueHTML = "<p style='color:#888;'>Queue empty</p>";
+                    }
+
+                    box.innerHTML = `
+                        <h4>${posTitle}</h4>
+                        <p><strong>Holder:</strong> ${holderText}</p>
+                        <p><strong>Queue:</strong></p>
+                        ${queueHTML}
+                    `;
+                    container.appendChild(box);
+                });
+
+                // Update UI text for Raed_64
+                if (currentStatus === "holder") {
+                    raedStatusEl.textContent = `Currently holding ${currentPositionName}!`;
+                } else if (currentStatus !== null) {
+                    raedStatusEl.textContent = `#${currentStatus} in queue for ${currentPositionName}`;
+                } else {
+                    raedStatusEl.textContent = `Not currently queued or holding any position.`;
+                }
+
+                // Handle Text-to-Speech logic on state changes
+                if (lastStatus !== null) {
+                    if (lastStatus !== "holder" && currentStatus === "holder") {
+                        speak(`Raed 64 is now holding ${currentPositionName}`);
+                    } 
+                    else if (typeof currentStatus === "number" && typeof lastStatus === "number") {
+                        if (currentStatus < lastStatus) {
+                            speak(`Raed 64 moved up to position ${currentStatus} for ${currentPositionName}`);
+                        } else if (currentStatus > lastStatus) {
+                            speak(`Raed 64 moved back to position ${currentStatus}`);
+                        }
+                    } 
+                    else if (lastStatus !== null && currentStatus === null) {
+                        speak(`Raed 64 has left the queue`);
+                    } 
+                    else if (lastStatus === null && currentStatus !== null) {
+                        if (currentStatus === "holder") {
+                            speak(`Raed 64 is now holding ${currentPositionName}`);
+                        } else {
+                            speak(`Raed 64 joined the queue at position ${currentStatus} for ${currentPositionName}`);
+                        }
+                    }
+                }
+
+                // Save current state for next 6-second comparison cycle
+                lastStatus = currentStatus;
+                lastPositionName = currentPositionName;
+
+            } catch (error) {
+                console.error("Failed to fetch API data:", error);
+            }
+        }
+
+        // Run immediately
+        updateQueue();
+
+        // Refresh cycle every 6 seconds
+        setInterval(updateQueue, 6000);
+    </script>
 </body>
+</html>
