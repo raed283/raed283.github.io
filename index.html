@@ -3,180 +3,179 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ground Control Queue Tracker</title>
+    <title>IRFD Ground Queue Tracker</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            background-color: #1a1a1a;
+            background-color: #121212;
             color: #ffffff;
             padding: 20px;
         }
-        .status-card {
-            background-color: #2a2a2a;
-            border-left: 5px solid #00a8ff;
-            padding: 15px;
-            margin-bottom: 20px;
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background-color: #1e1e1e;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        .status-box {
+            background-color: #00a8ff;
+            color: #000;
+            padding: 12px;
             border-radius: 4px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            text-align: center;
         }
-        .position-box {
-            background-color: #242424;
-            border: 1px solid #3d3d3d;
-            padding: 15px;
-            margin-bottom: 10px;
-            border-radius: 6px;
-        }
-        ul {
-            list-style-type: none;
-            padding: 0;
+        ol {
+            padding-left: 20px;
         }
         li {
-            padding: 6px 10px;
-            margin: 3px 0;
-            background-color: #333333;
-            border-radius: 3px;
+            padding: 6px;
+            margin-bottom: 4px;
+            background-color: #2a2a2a;
+            border-radius: 4px;
         }
-        li.target-user {
+        li.active-user {
             background-color: #00a8ff;
-            color: #ffffff;
+            color: #fff;
             font-weight: bold;
         }
     </style>
 </head>
 <body>
 
-    <h2>ATC Queue Monitor</h2>
-    
-    <!-- Status alert for Raed_64 -->
-    <div class="status-card">
-        <h3>User Status (Raed_64)</h3>
-        <p id="raed-status">Checking queue status...</p>
+    <div class="container">
+        <h2>IRFD GND Monitor</h2>
+        <div id="raed-status" class="status-box">Connecting to feed...</div>
+
+        <h3>Active Holder</h3>
+        <p id="ground-holder">Loading...</p>
+
+        <h3>Current Queue</h3>
+        <ol id="queue-list">
+            <li>Loading queue...</li>
+        </ol>
     </div>
 
-    <!-- Container for all airport position queues -->
-    <div id="queues-container">Loading position data...</div>
-
     <script>
-        const API_URL = "https://24data.ptfs.app/controllers";
+        // 1. FILL IN YOUR API URL HERE
+        const API_URL = "https://24data.ptfs.app/controllers"; 
+        
         const TARGET_USER = "Raed_64";
+        const TARGET_AIRPORT = "IRFD";
+        const TARGET_POSITION = "GND";
 
-        // Memory to track previous state across 6-second refreshes
-        let lastStatus = null; // 'holder', number (queue spot), or null (not in queue)
-        let lastPositionName = "";
+        let lastStatus = null; // Stores: 'holder', number (queue spot), or null
 
         function speak(text) {
             if ('speechSynthesis' in window) {
-                // Cancel ongoing speech to prevent overlapping queues
-                window.speechSynthesis.cancel();
+                window.speechSynthesis.cancel(); // Stop old speech
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.rate = 1.0;
                 window.speechSynthesis.speak(utterance);
             }
         }
 
-        async function updateQueue() {
+        async function updateIRFDGround() {
             try {
                 const response = await fetch(API_URL);
                 const positions = await response.json();
 
-                const container = document.getElementById("queues-container");
-                const raedStatusEl = document.getElementById("raed-status");
-                
-                container.innerHTML = ""; // Reset view
+                // Find specifically the IRFD GND object from the array
+                const irfdGround = positions.find(pos => 
+                    pos.airport === TARGET_AIRPORT && pos.position === TARGET_POSITION
+                );
 
-                let currentStatus = null;
-                let currentPositionName = "";
+                const statusEl = document.getElementById("raed-status");
+                const holderEl = document.getElementById("ground-holder");
+                const queueListEl = document.getElementById("queue-list");
 
-                // Process each airfield position object
-                positions.forEach((pos) => {
-                    const posTitle = `${pos.airport} ${pos.position}`;
-                    
-                    // 1. Check if Raed_64 is holding the position
-                    if (pos.holder === TARGET_USER) {
-                        currentStatus = "holder";
-                        currentPositionName = posTitle;
-                    }
-
-                    // 2. Check queue position if not holder
-                    const queueIndex = pos.queue ? pos.queue.indexOf(TARGET_USER) : -1;
-                    if (queueIndex !== -1 && currentStatus !== "holder") {
-                        currentStatus = queueIndex + 1; // 1-based index (1 = next up)
-                        currentPositionName = posTitle;
-                    }
-
-                    // Build UI for this position
-                    const box = document.createElement("div");
-                    box.className = "position-box";
-                    
-                    let holderText = pos.holder ? pos.holder : (pos.claimable ? "Available" : "None");
-                    let queueHTML = "";
-
-                    if (pos.queue && pos.queue.length > 0) {
-                        queueHTML = "<ol style='margin-top: 5px; padding-left: 20px;'>";
-                        pos.queue.forEach((user) => {
-                            const isUser = user === TARGET_USER;
-                            queueHTML += `<li class="${isUser ? 'target-user' : ''}">${user}</li>`;
-                        });
-                        queueHTML += "</ol>";
-                    } else {
-                        queueHTML = "<p style='color:#888;'>Queue empty</p>";
-                    }
-
-                    box.innerHTML = `
-                        <h4>${posTitle}</h4>
-                        <p><strong>Holder:</strong> ${holderText}</p>
-                        <p><strong>Queue:</strong></p>
-                        ${queueHTML}
-                    `;
-                    container.appendChild(box);
-                });
-
-                // Update UI text for Raed_64
-                if (currentStatus === "holder") {
-                    raedStatusEl.textContent = `Currently holding ${currentPositionName}!`;
-                } else if (currentStatus !== null) {
-                    raedStatusEl.textContent = `#${currentStatus} in queue for ${currentPositionName}`;
-                } else {
-                    raedStatusEl.textContent = `Not currently queued or holding any position.`;
+                if (!irfdGround) {
+                    statusEl.textContent = "IRFD GND data not found in feed";
+                    return;
                 }
 
-                // Handle Text-to-Speech logic on state changes
+                // Render Holder
+                holderEl.textContent = irfdGround.holder ? irfdGround.holder : (irfdGround.claimable ? "Available to claim" : "None");
+
+                // Render Queue
+                queueListEl.innerHTML = "";
+                const queue = irfdGround.queue || [];
+
+                if (queue.length === 0) {
+                    queueListEl.innerHTML = "<li style='background:none; color:#888;'>Queue is empty</li>";
+                } else {
+                    queue.forEach((user) => {
+                        const li = document.createElement("li");
+                        li.textContent = user;
+                        if (user === TARGET_USER) {
+                            li.className = "active-user";
+                        }
+                        queueListEl.appendChild(li);
+                    });
+                }
+
+                // Determine Raed_64's current status
+                let currentStatus = null;
+
+                if (irfdGround.holder === TARGET_USER) {
+                    currentStatus = "holder";
+                } else {
+                    const index = queue.indexOf(TARGET_USER);
+                    if (index !== -1) {
+                        currentStatus = index + 1; // 1-based index (#1, #2, etc.)
+                    }
+                }
+
+                // Update text status box
+                if (currentStatus === "holder") {
+                    statusEl.textContent = "Raed_64 is holding IRFD Ground!";
+                } else if (typeof currentStatus === "number") {
+                    statusEl.textContent = `Raed_64 is #${currentStatus} in queue for IRFD Ground`;
+                } else {
+                    statusEl.textContent = "Raed_64 is not in IRFD Ground queue";
+                }
+
+                // Text-To-Speech alert triggers on state change
                 if (lastStatus !== null) {
                     if (lastStatus !== "holder" && currentStatus === "holder") {
-                        speak(`Raed 64 is now holding ${currentPositionName}`);
+                        speak("Raed 64 is now holding IRFD Ground");
                     } 
                     else if (typeof currentStatus === "number" && typeof lastStatus === "number") {
                         if (currentStatus < lastStatus) {
-                            speak(`Raed 64 moved up to position ${currentStatus} for ${currentPositionName}`);
+                            speak(`Raed 64 moved up to position ${currentStatus} for IRFD Ground`);
                         } else if (currentStatus > lastStatus) {
-                            speak(`Raed 64 moved back to position ${currentStatus}`);
+                            speak(`Raed 64 moved back to position ${currentStatus} for IRFD Ground`);
                         }
                     } 
                     else if (lastStatus !== null && currentStatus === null) {
-                        speak(`Raed 64 has left the queue`);
+                        speak("Raed 64 left the IRFD Ground queue");
                     } 
                     else if (lastStatus === null && currentStatus !== null) {
                         if (currentStatus === "holder") {
-                            speak(`Raed 64 is now holding ${currentPositionName}`);
+                            speak("Raed 64 is now holding IRFD Ground");
                         } else {
-                            speak(`Raed 64 joined the queue at position ${currentStatus} for ${currentPositionName}`);
+                            speak(`Raed 64 joined IRFD Ground queue at position ${currentStatus}`);
                         }
                     }
                 }
 
-                // Save current state for next 6-second comparison cycle
+                // Save status for next comparison cycle
                 lastStatus = currentStatus;
-                lastPositionName = currentPositionName;
 
             } catch (error) {
-                console.error("Failed to fetch API data:", error);
+                console.error("Error fetching IRFD Ground data:", error);
             }
         }
 
         // Run immediately
-        updateQueue();
+        updateIRFDGround();
 
-        // Refresh cycle every 6 seconds
-        setInterval(updateQueue, 6000);
+        // Refresh every 6 seconds
+        setInterval(updateIRFDGround, 6000);
     </script>
+
 </body>
 </html>
