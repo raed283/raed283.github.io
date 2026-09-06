@@ -26,6 +26,11 @@
             margin-bottom: 20px;
             border-left: 4px solid #00a8ff;
         }
+        .status-line {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 12px;
+        }
         ol {
             padding-left: 20px;
         }
@@ -41,6 +46,7 @@
 
     <div class="container">
         <h2>IRFD Ground Monitor</h2>
+        <div class="status-line" id="status-line">Initializing...</div>
 
         <div class="holder-box">
             <strong>Current Holder:</strong>
@@ -54,15 +60,29 @@
     </div>
 
     <script>
-        // REPLACE THIS WITH YOUR API URL
-        const API_URL = "https://corsproxy.io/?" + encodeURIComponent("https://24data.ptfs.app/controllers"); 
+        const DIRECT_URL = "https://24data.ptfs.app/controllers";
+        // corsproxy.io was unreliable here (silent hangs / returned HTML error pages
+        // instead of JSON, which made response.json() throw and left the UI stuck
+        // on "Loading..." forever since errors only went to console).
+        // allorigins is generally more stable for this kind of read-only JSON proxying.
+        const PROXY_URL = "https://api.allorigins.win/raw?url=" + encodeURIComponent(DIRECT_URL);
 
         const TARGET_AIRPORT = "IRFD";
         const TARGET_POSITION = "GND";
 
-        // Stores state from previous cycle to detect changes
         let previousHolder = null;
-        let previousQueue = []; // Array of usernames from last fetch
+        let previousQueue = [];
+        let consecutiveFailures = 0;
+
+        function setStatus(msg) {
+            document.getElementById("status-line").textContent = msg;
+        }
+
+        function setHolderText(msg, isError) {
+            const holderEl = document.getElementById("ground-holder");
+            holderEl.textContent = msg;
+            holderEl.style.color = isError ? "#ff5555" : "#ffffff";
+        }
 
         function speak(text) {
             if ('speechSynthesis' in window) {
@@ -72,31 +92,76 @@
             }
         }
 
+        function fetchWithTimeout(url, ms) {
+            return Promise.race([
+                fetch(url, { cache: "no-store" }),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("Request timed out")), ms)
+                )
+            ]);
+        }
+
+        async function getPositions() {
+            // Try the proxy first, fall back to a direct fetch in case the
+            // browser/environment doesn't actually need CORS-proxying
+            // (e.g. server has since added CORS headers, or this is run
+            // somewhere without browser CORS restrictions).
+            const attempts = [PROXY_URL, DIRECT_URL];
+            let lastError = null;
+
+            for (const url of attempts) {
+                try {
+                    const response = await fetchWithTimeout(url, 8000);
+                    if (!response.ok) {
+                        lastError = new Error(`HTTP ${response.status} from ${url}`);
+                        continue;
+                    }
+                    const text = await response.text();
+                    // Guard against proxies returning an HTML error/interstitial
+                    // page with a 200 status instead of real JSON.
+                    let data;
+                    try {
+                        data = JSON.parse(text);
+                    } catch (parseErr) {
+                        lastError = new Error(`Non-JSON response from ${url}`);
+                        continue;
+                    }
+                    if (!Array.isArray(data)) {
+                        lastError = new Error(`Unexpected response shape from ${url}`);
+                        continue;
+                    }
+                    return data;
+                } catch (err) {
+                    lastError = err;
+                    continue;
+                }
+            }
+            throw lastError || new Error("All fetch attempts failed");
+        }
+
         async function updateIRFDGround() {
             try {
-                const response = await fetch(API_URL);
-                const positions = await response.json();
+                const positions = await getPositions();
 
-                // Find IRFD GND in the position[] array
-                const irfdGround = positions.find(pos => 
+                const irfdGround = positions.find(pos =>
                     pos.airport === TARGET_AIRPORT && pos.position === TARGET_POSITION
                 );
 
-                const holderEl = document.getElementById("ground-holder");
                 const queueListEl = document.getElementById("queue-list");
 
                 if (!irfdGround) {
-                    holderEl.textContent = "Position data not found";
+                    setHolderText("Position data not found", true);
+                    setStatus("Fetched OK but IRFD/GND missing from response — check TARGET_AIRPORT/TARGET_POSITION");
                     return;
                 }
 
                 const currentHolder = irfdGround.holder;
                 const currentQueue = irfdGround.queue || [];
 
-                // 1. Update UI - Holder
-                holderEl.textContent = currentHolder ? currentHolder : (irfdGround.claimable ? "Available" : "None");
+                setHolderText(currentHolder ? currentHolder : (irfdGround.claimable ? "Available" : "None"), false);
+                setStatus("Last updated: " + new Date().toLocaleTimeString());
+                consecutiveFailures = 0;
 
-                // 2. Update UI - Queue
                 queueListEl.innerHTML = "";
                 if (currentQueue.length === 0) {
                     queueListEl.innerHTML = "<li style='background:none; color:#888;'>Queue is empty</li>";
@@ -108,10 +173,7 @@
                     });
                 }
 
-                // 3. TTS Logic: Compare current fetch against previous fetch
                 if (previousHolder !== null || previousQueue.length > 0) {
-
-                    // Check if holder changed
                     if (currentHolder !== previousHolder) {
                         if (currentHolder) {
                             speak(`${currentHolder} is now holding IRFD Ground.`);
@@ -120,10 +182,8 @@
                         }
                     }
 
-                    // Check for newly joined users
                     currentQueue.forEach((user, currentIndex) => {
                         const previousIndex = previousQueue.indexOf(user);
-
                         if (previousIndex === -1 && user !== currentHolder) {
                             speak(`${user} joined the queue at position ${currentIndex + 1}.`);
                         } else if (previousIndex > currentIndex) {
@@ -131,7 +191,6 @@
                         }
                     });
 
-                    // Check for users who left or were removed from the queue
                     previousQueue.forEach((user) => {
                         if (!currentQueue.includes(user) && user !== currentHolder) {
                             speak(`${user} left the queue.`);
@@ -139,19 +198,19 @@
                     });
                 }
 
-                // Save state for the next 6-second comparison
                 previousHolder = currentHolder;
                 previousQueue = [...currentQueue];
 
             } catch (error) {
-                console.error("Error fetching IRFD Ground data:", error);
+                consecutiveFailures++;
+                const msg = (error && error.message) ? error.message : String(error);
+                console.error("Error fetching IRFD Ground data: " + msg);
+                setHolderText("Fetch failed", true);
+                setStatus(`Error (${consecutiveFailures}x): ${msg}`);
             }
         }
 
-        // Run immediately on page load
         updateIRFDGround();
-
-        // Refresh every 6 seconds
         setInterval(updateIRFDGround, 6000);
     </script>
 
